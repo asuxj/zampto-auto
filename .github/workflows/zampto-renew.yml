@@ -1,8 +1,15 @@
 name: Zampto Renew
 
 on:
-  schedule:
-    - cron: "0 */6 * * *"
+  # 监听 main 分支 push
+  push:
+    branches:
+      - main
+    paths:
+      - "zampto-renew.py"
+      - "requirements.txt"
+
+  # 手动触发
   workflow_dispatch:
 
 jobs:
