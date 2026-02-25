@@ -13,6 +13,13 @@ from pyvirtualdisplay import Display
 LOGIN_URL = "https://auth.zampto.net/sign-in?app_id=bmhk6c8qdqxphlyscztgl"
 DASHBOARD_URL = "https://dash.zampto.net/overview"
 
+SILENT = False
+
+
+def log(*args):
+    if not SILENT:
+        print(*args, flush=True)
+
 
 # =========================
 # Xvfb
@@ -22,9 +29,39 @@ def setup_xvfb():
         display = Display(visible=False, size=(1920, 1080))
         display.start()
         os.environ["DISPLAY"] = display.new_display_var
-        print("🖥️ Xvfb 已启动")
+        log("🖥️ Xvfb 已启动")
         return display
     return None
+
+
+# =========================
+# Turnstile 处理
+# =========================
+def handle_turnstile_if_present(sb):
+    try:
+        if sb.is_element_present('input[name="cf-turnstile-response"]'):
+            log("🛡️ Turnstile 检测中...")
+
+            try:
+                sb.uc_gui_click_captcha()
+            except:
+                pass
+
+            for _ in range(20):
+                value = sb.get_attribute(
+                    'input[name="cf-turnstile-response"]',
+                    "value"
+                )
+                if value and len(value) > 10:
+                    log("✅ Turnstile OK")
+                    return True
+                time.sleep(1)
+
+            log("⚠️ Turnstile 未成功")
+    except:
+        pass
+
+    return False
 
 
 # =========================
@@ -51,7 +88,7 @@ def tg_send(token: str, chat_id: str, msg: str):
             timeout=15,
         )
     except Exception as e:
-        print("⚠️ TG 发送失败:", e)
+        log("⚠️ TG 发送失败:", e)
 
 
 def extract_server_id(text: str) -> Optional[str]:
@@ -68,8 +105,7 @@ def load_accounts():
         raise RuntimeError("❌ 缺少 ZAMPTO_BATCH")
 
     accounts = []
-
-    for idx, line in enumerate(raw.splitlines(), start=1):
+    for line in raw.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -83,7 +119,7 @@ def load_accounts():
         elif len(parts) == 4:
             email, password, tg_token, tg_chat_id = parts
         else:
-            raise RuntimeError(f"❌ 第 {idx} 行格式错误，应为 2 或 4 列")
+            continue
 
         accounts.append((email, password, tg_token, tg_chat_id))
 
@@ -94,19 +130,19 @@ def load_accounts():
 # 登录流程
 # =========================
 def login(sb: SB, username: str, password: str) -> bool:
-    print("🔐 打开登录页...")
+    log("🔐 打开登录页...")
     sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5)
 
-    # 输入邮箱
     sb.wait_for_element_visible("input[name='identifier']", timeout=30)
     sb.type("input[name='identifier']", username)
     sb.click("button[name='submit']")
 
-    # 输入密码
     sb.wait_for_element_visible("input[name='password']", timeout=30)
     sb.type("input[name='password']", password)
-    sb.click("button[name='submit']")
 
+    handle_turnstile_if_present(sb)
+
+    sb.click("button[name='submit']")
     sb.wait_for_ready_state_complete(timeout=30)
 
     # 等待跳转
@@ -115,29 +151,27 @@ def login(sb: SB, username: str, password: str) -> bool:
             break
         time.sleep(1)
     else:
-        print("❌ 未跳转到控制台")
+        log("❌ 未跳转到 dash")
         return False
 
-    # 判定成功标志
-    sb.wait_for_text("Username", timeout=20)
-    print("✅ 登录成功")
-    return True
+    # 通过 info-content 判定登录成功
+    if sb.is_element_present("div.info-content"):
+        log("✅ 登录成功")
+        return True
+
+    log("❌ 登录判定失败")
+    return False
 
 
 # =========================
 # 获取 Server ID
 # =========================
 def get_server_id(sb: SB) -> Optional[str]:
-    print("📡 访问 Overview 页面...")
     sb.open(DASHBOARD_URL)
-
     sb.wait_for_element_visible("div.server-id", timeout=30)
+
     text = sb.get_text("div.server-id")
-
-    server_id = extract_server_id(text)
-    print("🖥️ Server ID:", server_id)
-
-    return server_id
+    return extract_server_id(text)
 
 
 # =========================
@@ -152,27 +186,20 @@ def get_last_renew_time(sb: SB) -> str:
 # 执行续期
 # =========================
 def renew_server(sb: SB, server_id: str) -> Tuple[str, str]:
-    server_url = f"https://dash.zampto.net/server?id={server_id}"
-    print("🚀 打开服务器页面:", server_url)
-    sb.open(server_url)
+    url = f"https://dash.zampto.net/server?id={server_id}"
+    sb.open(url)
 
     old_time = get_last_renew_time(sb)
-    print("旧时间:", old_time)
+    log("旧时间:", old_time)
 
-    print("🔁 点击 Renew Server...")
     sb.click("a.action-purple")
 
-    # 等待 Turnstile token 注入
-    sb.wait_for_element_present(
-        "input[name='cf-turnstile-response']", timeout=60
-    )
+    handle_turnstile_if_present(sb)
 
-    # 等待页面刷新
-    print("⏳ 等待刷新...")
     time.sleep(6)
 
     new_time = get_last_renew_time(sb)
-    print("新时间:", new_time)
+    log("新时间:", new_time)
 
     return old_time, new_time
 
@@ -192,17 +219,15 @@ def renew_one(email: str, password: str):
 
             old_time, new_time = renew_server(sb, server_id)
 
-            success = old_time != new_time
-
             return True, {
                 "server_id": server_id,
                 "old_time": old_time,
                 "new_time": new_time,
-                "success": success,
+                "success": old_time != new_time,
             }
 
     except Exception as e:
-        print("💥 内部异常:", e)
+        log("💥 内部异常:", e)
         return False, str(e)
 
 
@@ -217,14 +242,14 @@ def main():
         for i, (email, password, tg_token, tg_chat_id) in enumerate(accounts, 1):
             masked = mask_account(email)
 
-            print("\n" + "=" * 60)
-            print(f"🔐 [{i}/{len(accounts)}] {masked}")
-            print("=" * 60)
+            log("\n" + "=" * 60)
+            log(f"🔐 [{i}/{len(accounts)}] {masked}")
+            log("=" * 60)
 
             ok, data = renew_one(email, password)
 
             if not ok:
-                msg = f"❌ *zampto 登录或续期失败*\n账号: `{masked}`\n错误: `{data}`"
+                msg = f"❌ *zampto 执行失败*\n账号: `{masked}`\n错误: `{data}`"
             else:
                 now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -232,7 +257,6 @@ def main():
                     msg = (
                         f"🏰 *zampto 续期报告*\n\n"
                         f"🖥️ 服务器 ID: `{data['server_id']}`\n"
-                        f"🚀 续期状态: 成功\n"
                         f"💳 新到期时间: `{data['new_time']}`\n"
                         f"⏰ 时间: `{now}`"
                     )
@@ -244,7 +268,7 @@ def main():
                         f"当前时间: `{data['new_time']}`"
                     )
 
-            print(msg)
+            log(msg)
             tg_send(tg_token, tg_chat_id, msg)
             time.sleep(3)
 
