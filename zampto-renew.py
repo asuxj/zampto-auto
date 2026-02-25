@@ -13,6 +13,7 @@ from pyvirtualdisplay import Display
 LOGIN_URL = "https://auth.zampto.net/sign-in?app_id=bmhk6c8qdqxphlyscztgl"
 DASHBOARD_URL = "https://dash.zampto.net/overview"
 
+
 # =========================
 # Xvfb
 # =========================
@@ -90,9 +91,10 @@ def load_accounts():
 
 
 # =========================
-# 登录
+# 登录流程
 # =========================
 def login(sb: SB, username: str, password: str) -> bool:
+    print("🔐 打开登录页...")
     sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5)
 
     # 输入邮箱
@@ -105,20 +107,19 @@ def login(sb: SB, username: str, password: str) -> bool:
     sb.type("input[name='password']", password)
     sb.click("button[name='submit']")
 
-    # ✅ 正确写法：等待 URL 变化
     sb.wait_for_ready_state_complete(timeout=30)
 
-    # 用 get_current_url 判断
+    # 等待跳转
     for _ in range(30):
         if "dash.zampto.net" in sb.get_current_url():
             break
         time.sleep(1)
     else:
+        print("❌ 未跳转到控制台")
         return False
 
-    # 再确认页面包含 Username 作为成功标志
+    # 判定成功标志
     sb.wait_for_text("Username", timeout=20)
-
     print("✅ 登录成功")
     return True
 
@@ -127,15 +128,20 @@ def login(sb: SB, username: str, password: str) -> bool:
 # 获取 Server ID
 # =========================
 def get_server_id(sb: SB) -> Optional[str]:
+    print("📡 访问 Overview 页面...")
     sb.open(DASHBOARD_URL)
-    sb.wait_for_element_visible("div.server-id", timeout=30)
 
+    sb.wait_for_element_visible("div.server-id", timeout=30)
     text = sb.get_text("div.server-id")
-    return extract_server_id(text)
+
+    server_id = extract_server_id(text)
+    print("🖥️ Server ID:", server_id)
+
+    return server_id
 
 
 # =========================
-# 获取时间
+# 获取续期时间
 # =========================
 def get_last_renew_time(sb: SB) -> str:
     sb.wait_for_element_visible("#lastRenewalTime", timeout=30)
@@ -147,19 +153,23 @@ def get_last_renew_time(sb: SB) -> str:
 # =========================
 def renew_server(sb: SB, server_id: str) -> Tuple[str, str]:
     server_url = f"https://dash.zampto.net/server?id={server_id}"
+    print("🚀 打开服务器页面:", server_url)
     sb.open(server_url)
 
     old_time = get_last_renew_time(sb)
     print("旧时间:", old_time)
 
-    # 点击 Renew
+    print("🔁 点击 Renew Server...")
     sb.click("a.action-purple")
 
-    # 等待 Turnstile token
-    sb.wait_for_element_present("input[name='cf-turnstile-response']", timeout=60)
+    # 等待 Turnstile token 注入
+    sb.wait_for_element_present(
+        "input[name='cf-turnstile-response']", timeout=60
+    )
 
-    # 等待页面自动刷新
-    time.sleep(5)
+    # 等待页面刷新
+    print("⏳ 等待刷新...")
+    time.sleep(6)
 
     new_time = get_last_renew_time(sb)
     print("新时间:", new_time)
@@ -171,24 +181,29 @@ def renew_server(sb: SB, server_id: str) -> Tuple[str, str]:
 # 单账号流程
 # =========================
 def renew_one(email: str, password: str):
-    with SB(uc=True, locale="en", test=True) as sb:
-        if not login(sb, email, password):
-            return False, "登录失败"
+    try:
+        with SB(uc=True, locale="en", test=True) as sb:
+            if not login(sb, email, password):
+                return False, "登录失败"
 
-        server_id = get_server_id(sb)
-        if not server_id:
-            return False, "未找到 Server ID"
+            server_id = get_server_id(sb)
+            if not server_id:
+                return False, "未找到 Server ID"
 
-        old_time, new_time = renew_server(sb, server_id)
+            old_time, new_time = renew_server(sb, server_id)
 
-        success = old_time != new_time
+            success = old_time != new_time
 
-        return True, {
-            "server_id": server_id,
-            "old_time": old_time,
-            "new_time": new_time,
-            "success": success,
-        }
+            return True, {
+                "server_id": server_id,
+                "old_time": old_time,
+                "new_time": new_time,
+                "success": success,
+            }
+
+    except Exception as e:
+        print("💥 内部异常:", e)
+        return False, str(e)
 
 
 # =========================
@@ -206,32 +221,28 @@ def main():
             print(f"🔐 [{i}/{len(accounts)}] {masked}")
             print("=" * 60)
 
-            try:
-                ok, data = renew_one(email, password)
+            ok, data = renew_one(email, password)
 
-                if not ok:
-                    msg = f"❌ *zampto 登录失败*\n账号: `{masked}`"
+            if not ok:
+                msg = f"❌ *zampto 登录或续期失败*\n账号: `{masked}`\n错误: `{data}`"
+            else:
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                if data["success"]:
+                    msg = (
+                        f"🏰 *zampto 续期报告*\n\n"
+                        f"🖥️ 服务器 ID: `{data['server_id']}`\n"
+                        f"🚀 续期状态: 成功\n"
+                        f"💳 新到期时间: `{data['new_time']}`\n"
+                        f"⏰ 时间: `{now}`"
+                    )
                 else:
-                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-                    if data["success"]:
-                        msg = (
-                            f"🏰 *zampto 续期报告*\n\n"
-                            f"🖥️ 服务器 ID: `{data['server_id']}`\n"
-                            f"🚀 开机任务: 已提交\n"
-                            f"💳 到期时间: `{data['new_time']}`\n"
-                            f"⏰ 时间: `{now}`"
-                        )
-                    else:
-                        msg = (
-                            f"⚠️ *zampto 续期未变化*\n\n"
-                            f"🖥️ 服务器 ID: `{data['server_id']}`\n"
-                            f"旧时间: `{data['old_time']}`\n"
-                            f"当前时间: `{data['new_time']}`"
-                        )
-
-            except Exception as e:
-                msg = f"💥 *zampto 异常*\n账号: `{masked}`\n错误: `{e}`"
+                    msg = (
+                        f"⚠️ *zampto 续期未变化*\n\n"
+                        f"🖥️ 服务器 ID: `{data['server_id']}`\n"
+                        f"旧时间: `{data['old_time']}`\n"
+                        f"当前时间: `{data['new_time']}`"
+                    )
 
             print(msg)
             tg_send(tg_token, tg_chat_id, msg)
