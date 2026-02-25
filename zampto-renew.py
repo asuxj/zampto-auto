@@ -95,22 +95,32 @@ def load_accounts():
 def login(sb: SB, username: str, password: str) -> bool:
     sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5)
 
+    # 输入邮箱
     sb.wait_for_element_visible("input[name='identifier']", timeout=30)
     sb.type("input[name='identifier']", username)
     sb.click("button[name='submit']")
 
+    # 输入密码
     sb.wait_for_element_visible("input[name='password']", timeout=30)
     sb.type("input[name='password']", password)
     sb.click("button[name='submit']")
 
-    sb.wait_for_url_contains("dash.zampto.net", timeout=30)
+    # ✅ 正确写法：等待 URL 变化
+    sb.wait_for_ready_state_complete(timeout=30)
 
-    # 判定成功：是否存在 Username
-    if sb.is_text_visible("Username"):
-        print("✅ 登录成功")
-        return True
+    # 用 get_current_url 判断
+    for _ in range(30):
+        if "dash.zampto.net" in sb.get_current_url():
+            break
+        time.sleep(1)
+    else:
+        return False
 
-    return False
+    # 再确认页面包含 Username 作为成功标志
+    sb.wait_for_text("Username", timeout=20)
+
+    print("✅ 登录成功")
+    return True
 
 
 # =========================
