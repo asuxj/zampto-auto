@@ -35,36 +35,6 @@ def setup_xvfb():
 
 
 # =========================
-# Turnstile 处理
-# =========================
-def handle_turnstile_if_present(sb):
-    try:
-        if sb.is_element_present('input[name="cf-turnstile-response"]'):
-            log("🛡️ Turnstile 检测中...")
-
-            try:
-                sb.uc_gui_click_captcha()
-            except:
-                pass
-
-            for _ in range(20):
-                value = sb.get_attribute(
-                    'input[name="cf-turnstile-response"]',
-                    "value"
-                )
-                if value and len(value) > 10:
-                    log("✅ Turnstile OK")
-                    return True
-                time.sleep(1)
-
-            log("⚠️ Turnstile 未成功")
-    except:
-        pass
-
-    return False
-
-
-# =========================
 # 工具函数
 # =========================
 def mask_account(name: str) -> str:
@@ -127,39 +97,35 @@ def load_accounts():
 
 
 # =========================
-# 登录流程
+# 登录流程（已修正）
 # =========================
 def login(sb: SB, username: str, password: str) -> bool:
     log("🔐 打开登录页...")
     sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5)
 
+    # === Step 1 输入邮箱 ===
     sb.wait_for_element_visible("input[name='identifier']", timeout=30)
     sb.type("input[name='identifier']", username)
+
+    log("➡️ 点击【登录】")
     sb.click("button[name='submit']")
 
+    # === Step 2 输入密码 ===
     sb.wait_for_element_visible("input[name='password']", timeout=30)
     sb.type("input[name='password']", password)
 
-    handle_turnstile_if_present(sb)
-
+    log("➡️ 点击【继续】")
     sb.click("button[name='submit']")
-    sb.wait_for_ready_state_complete(timeout=30)
 
-    # 等待跳转
+    # === Step 3 等待跳转 ===
     for _ in range(30):
-        if "dash.zampto.net" in sb.get_current_url():
-            break
+        current = sb.get_current_url()
+        if "dash.zampto.net" in current:
+            log("✅ 登录成功")
+            return True
         time.sleep(1)
-    else:
-        log("❌ 未跳转到 dash")
-        return False
 
-    # 通过 info-content 判定登录成功
-    if sb.is_element_present("div.info-content"):
-        log("✅ 登录成功")
-        return True
-
-    log("❌ 登录判定失败")
+    log("❌ 登录失败，未跳转到 dash")
     return False
 
 
@@ -168,7 +134,10 @@ def login(sb: SB, username: str, password: str) -> bool:
 # =========================
 def get_server_id(sb: SB) -> Optional[str]:
     sb.open(DASHBOARD_URL)
-    sb.wait_for_element_visible("div.server-id", timeout=30)
+    sb.wait_for_ready_state_complete(timeout=30)
+
+    if not sb.is_element_present("div.server-id"):
+        return None
 
     text = sb.get_text("div.server-id")
     return extract_server_id(text)
@@ -193,8 +162,6 @@ def renew_server(sb: SB, server_id: str) -> Tuple[str, str]:
     log("旧时间:", old_time)
 
     sb.click("a.action-purple")
-
-    handle_turnstile_if_present(sb)
 
     time.sleep(6)
 
@@ -255,7 +222,7 @@ def main():
 
                 if data["success"]:
                     msg = (
-                        f"🏰 *zampto 续期报告*\n\n"
+                        f"🏰 *zampto 续期成功*\n\n"
                         f"🖥️ 服务器 ID: `{data['server_id']}`\n"
                         f"💳 新到期时间: `{data['new_time']}`\n"
                         f"⏰ 时间: `{now}`"
