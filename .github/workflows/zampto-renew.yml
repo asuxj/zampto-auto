@@ -1,0 +1,29 @@
+name: Zampto Renew
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run renew script
+        env:
+          ZAMPTO_BATCH: ${{ secrets.ZAMPTO_BATCH }}
+        run: |
+          python zampto-renew.py
