@@ -135,8 +135,15 @@ def login(sb: SB, username: str, password: str) -> bool:
 def get_server_id(sb: SB) -> Optional[str]:
     sb.open(DASHBOARD_URL)
     sb.wait_for_ready_state_complete(timeout=30)
+    
+    # 调试：打印页面源码
+    html = sb.get_page_source()
+    log("=== PAGE SOURCE ===")
+    log(html[:3000])  # 打印前3000字符
+    log("=== END ===")
 
     if not sb.is_element_present("div.server-id"):
+        log("❌ 未找到 div.server-id")
         return None
 
     text = sb.get_text("div.server-id")
